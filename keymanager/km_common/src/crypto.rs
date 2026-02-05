@@ -195,11 +195,7 @@ mod tests {
         let (_pk_r, sk_r) = generate_keypair(kem_algo).expect("KEM generation failed");
 
         let enc = [0u8; 32];
-        let algo = HpkeAlgorithm {
-            kem: KemAlgorithm::Unspecified as i32,
-            kdf: KdfAlgorithm::HkdfSha256 as i32,
-            aead: AeadAlgorithm::Aes256Gcm as i32,
-        };
+        let algo = KemAlgorithm::Unspecified;
 
         let result = hpke_open(&sk_r, &enc, &[], &[], &algo);
         assert!(matches!(result, Err(Error::UnsupportedAlgorithm)));
@@ -313,6 +309,31 @@ mod tests {
         let algo = KemAlgorithm::Unspecified;
 
         let result = generate_keypair(algo);
+        assert!(matches!(result, Err(Error::UnsupportedAlgorithm)));
+    }
+
+    #[test]
+    fn test_generate_kem_success() {
+        let algo = KemAlgorithm::DhkemX25519HkdfSha256;
+        let (pub_key, priv_key) = generate_x25519_keypair(algo).expect("KEM generation failed");
+        assert_eq!(pub_key.len(), 32);
+        assert_eq!(priv_key.len(), 32);
+    }
+
+    #[test]
+    fn test_generate_hpke_success() {
+        let algo = KemAlgorithm::DhkemX25519HkdfSha256;
+
+        let (pub_key, priv_key) = generate_x25519_keypair(algo).expect("HPKE generation failed");
+        assert_eq!(pub_key.len(), 32);
+        assert_eq!(priv_key.len(), 32);
+    }
+
+    #[test]
+    fn test_generate_hpke_unsupported() {
+        let algo = KemAlgorithm::Unspecified;
+
+        let result = generate_x25519_keypair(algo);
         assert!(matches!(result, Err(Error::UnsupportedAlgorithm)));
     }
 }
