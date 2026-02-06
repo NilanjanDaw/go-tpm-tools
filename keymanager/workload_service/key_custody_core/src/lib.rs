@@ -1,6 +1,7 @@
 use km_common::algorithms::HpkeAlgorithm;
 use km_common::key_types::{KeyRecord, KeyRegistry, KeySpec};
 use lazy_static::lazy_static;
+use uuid::Uuid;
 
 lazy_static! {
     static ref KEY_REGISTRY: KeyRegistry = KeyRegistry::default();
@@ -70,6 +71,23 @@ pub unsafe extern "C" fn key_manager_generate_binding_keypair(
             0 // Success
         }
         Err(e) => e,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn key_manager_destroy_binding_key(uuid_bytes: *const u8) -> i32 {
+    if uuid_bytes.is_null() {
+        return -1;
+    }
+    let uuid = unsafe {
+        let mut bytes = [0u8; 16];
+        std::ptr::copy_nonoverlapping(uuid_bytes, bytes.as_mut_ptr(), 16);
+        Uuid::from_bytes(bytes)
+    };
+
+    match KEY_REGISTRY.remove_key(&uuid) {
+        Some(_) => 0, // Success
+        None => -1,   // Not found
     }
 }
 
@@ -167,5 +185,37 @@ mod tests {
         };
 
         assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn test_destroy_binding_key_success() {
+        let mut uuid_bytes = [0u8; 16];
+        let algo = HpkeAlgorithm {
+            kem: KemAlgorithm::DhkemX25519HkdfSha256 as i32,
+            kdf: KdfAlgorithm::HkdfSha256 as i32,
+            aead: AeadAlgorithm::Aes256Gcm as i32,
+        };
+
+        key_manager_generate_binding_keypair(algo, 3600, uuid_bytes.as_mut_ptr());
+
+        let result = key_manager_destroy_binding_key(uuid_bytes.as_ptr());
+        assert_eq!(result, 0);
+
+        // Second destroy should fail
+        let result = key_manager_destroy_binding_key(uuid_bytes.as_ptr());
+        assert_eq!(result, -1);
+    }
+
+    #[test]
+    fn test_destroy_binding_key_not_found() {
+        let uuid_bytes = [0u8; 16];
+        let result = key_manager_destroy_binding_key(uuid_bytes.as_ptr());
+        assert_eq!(result, -1);
+    }
+
+    #[test]
+    fn test_destroy_binding_key_null_ptr() {
+        let result = key_manager_destroy_binding_key(std::ptr::null());
+        assert_eq!(result, -1);
     }
 }
