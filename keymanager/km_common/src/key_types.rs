@@ -120,9 +120,13 @@ mod tests {
         // Check metadata
         assert!(!record.meta.id.is_nil());
         assert!(record.meta.delete_after > record.meta.created_at);
-        
+
         // Check spec
-        if let KeySpec::Binding { algo: a, binding_public_key: pk } = record.meta.spec {
+        if let KeySpec::Binding {
+            algo: a,
+            binding_public_key: pk,
+        } = record.meta.spec
+        {
             assert_eq!(a.kem, algo.kem);
             assert_eq!(pk.len(), 32);
         } else {
@@ -149,7 +153,12 @@ mod tests {
         assert!(result.is_ok());
         let record = result.unwrap();
 
-        if let KeySpec::KemWithBindingPub { algo: a, kem_public_key: kpk, binding_public_key: bpk } = record.meta.spec {
+        if let KeySpec::KemWithBindingPub {
+            algo: a,
+            kem_public_key: kpk,
+            binding_public_key: bpk,
+        } = record.meta.spec
+        {
             assert_eq!(a.kem, algo.kem);
             assert_eq!(kpk.len(), 32);
             assert_eq!(bpk, binding_pubkey.to_vec());
@@ -166,11 +175,12 @@ mod tests {
             kdf: KdfAlgorithm::HkdfSha256 as i32,
             aead: AeadAlgorithm::Aes256Gcm as i32,
         };
-        
+
         let record = create_key_record(algo, 3600, |a, pk| KeySpec::Binding {
             algo: a,
             binding_public_key: pk,
-        }).expect("failed to create key");
+        })
+        .expect("failed to create key");
 
         let id = record.meta.id;
         registry.add_key(record);
