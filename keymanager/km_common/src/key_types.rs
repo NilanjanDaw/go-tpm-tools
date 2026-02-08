@@ -207,7 +207,7 @@ mod tests {
         {
             assert_eq!(a.kem, algo.kem);
             assert_eq!(kpk.len(), 32);
-            assert_eq!(bpk, &binding_pubkey.to_vec());
+            assert_eq!(bpk, binding_pubkey.to_vec());
         } else {
             panic!("Unexpected KeySpec variant");
         }
