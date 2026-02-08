@@ -1,6 +1,7 @@
 use crate::algorithms::{AeadAlgorithm, HpkeAlgorithm, KdfAlgorithm, KemAlgorithm};
-use bssl_crypto::aead::Aead;
-use bssl_crypto::{aead, hkdf, hpke, x25519};
+#[cfg(any(test, feature = "test-utils"))]
+use bssl_crypto::{aead, aead::Aead};
+use bssl_crypto::{hkdf, hpke, x25519};
 use clear_on_drop::clear_stack_on_return;
 use thiserror::Error;
 
