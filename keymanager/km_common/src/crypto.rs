@@ -3,7 +3,6 @@ pub mod secret_box;
 use crate::crypto::secret_box::SecretBox;
 use clear_on_drop::clear_stack_on_return;
 use thiserror::Error;
-use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 mod x25519;
 pub use x25519::{X25519PrivateKey, X25519PublicKey};
@@ -60,6 +59,15 @@ impl PublicKey {
     }
 }
 
+impl TryFrom<Vec<u8>> for PublicKey {
+    type Error = Error;
+
+    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
+        let bytes: [u8; 32] = value.try_into().map_err(|_| Error::KeyLenMismatch)?;
+        Ok(PublicKey::X25519(X25519PublicKey(bytes)))
+    }
+}
+
 impl PublicKeyOps for PublicKey {
     fn hpke_seal_internal(
         &self,
@@ -80,6 +88,15 @@ impl PublicKeyOps for PublicKey {
 /// A wrapper enum for different private key types.
 pub enum PrivateKey {
     X25519(X25519PrivateKey),
+}
+
+impl PrivateKey {
+    /// Consumes the `PrivateKey` and returns the inner `SecretBox`.
+    pub fn into_secret(self) -> SecretBox {
+        match self {
+            PrivateKey::X25519(sk) => sk.into_secret(),
+        }
+    }
 }
 
 impl PrivateKeyOps for PrivateKey {
@@ -196,7 +213,11 @@ mod tests {
         let (_pk_r, sk_r) = generate_keypair(kem_algo).expect("KEM generation failed");
 
         let enc = [0u8; 32];
-        let algo = KemAlgorithm::Unspecified;
+        let algo = HpkeAlgorithm {
+            kem: KemAlgorithm::Unspecified as i32,
+            kdf: KdfAlgorithm::Unspecified as i32,
+            aead: AeadAlgorithm::Unspecified as i32,
+        };
 
         let result = hpke_open(&sk_r, &enc, &[], &[], &algo);
         assert!(matches!(result, Err(Error::UnsupportedAlgorithm)));
@@ -310,31 +331,6 @@ mod tests {
         let algo = KemAlgorithm::Unspecified;
 
         let result = generate_keypair(algo);
-        assert!(matches!(result, Err(Error::UnsupportedAlgorithm)));
-    }
-
-    #[test]
-    fn test_generate_kem_success() {
-        let algo = KemAlgorithm::DhkemX25519HkdfSha256;
-        let (pub_key, priv_key) = generate_x25519_keypair(algo).expect("KEM generation failed");
-        assert_eq!(pub_key.len(), 32);
-        assert_eq!(priv_key.len(), 32);
-    }
-
-    #[test]
-    fn test_generate_hpke_success() {
-        let algo = KemAlgorithm::DhkemX25519HkdfSha256;
-
-        let (pub_key, priv_key) = generate_x25519_keypair(algo).expect("HPKE generation failed");
-        assert_eq!(pub_key.len(), 32);
-        assert_eq!(priv_key.len(), 32);
-    }
-
-    #[test]
-    fn test_generate_hpke_unsupported() {
-        let algo = KemAlgorithm::Unspecified;
-
-        let result = generate_x25519_keypair(algo);
         assert!(matches!(result, Err(Error::UnsupportedAlgorithm)));
     }
 }
