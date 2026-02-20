@@ -1,6 +1,7 @@
 use km_common::algorithms::HpkeAlgorithm;
 use km_common::crypto::PublicKey;
 use km_common::crypto::secret_box::SecretBox;
+use km_common::errors::KeyManagerError;
 use km_common::key_types::{KeyRecord, KeyRegistry, KeySpec};
 use prost::Message;
 use std::slice;
@@ -20,7 +21,7 @@ static KEY_REGISTRY: LazyLock<KeyRegistry> = LazyLock::new(|| {
 fn generate_binding_keypair_internal(
     algo: HpkeAlgorithm,
     expiry_secs: u64,
-) -> Result<(uuid::Uuid, PublicKey), i32> {
+) -> Result<(uuid::Uuid, PublicKey), KeyManagerError> {
     let result = KeyRecord::create_binding_key(algo, Duration::from_secs(expiry_secs));
 
     match result {
@@ -30,12 +31,12 @@ fn generate_binding_keypair_internal(
                 KeySpec::Binding {
                     binding_public_key, ..
                 } => binding_public_key.clone(),
-                _ => return Err(-1),
+                _ => return Err(KeyManagerError::InternalError),
             };
             KEY_REGISTRY.add_key(record);
             Ok((id, pubkey))
         }
-        Err(_) => Err(-1),
+        Err(e) => Err(e.into()),
     }
 }
 
@@ -59,9 +60,8 @@ fn generate_binding_keypair_internal(
 /// * `out_pubkey_len` is either null or points to a valid `usize`.
 ///
 /// ## Returns
-/// * `0` on success.
-/// * `-1` if an error occurred during key generation.
-/// * `-2` if the `out_pubkey` buffer size does not match the key size.
+/// * `KeyManagerError::Success` (0) on success.
+/// * Error code on failure.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn key_manager_generate_binding_keypair(
     algo_ptr: *const u8,
@@ -74,7 +74,7 @@ pub unsafe extern "C" fn key_manager_generate_binding_keypair(
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // Safety Invariant Checks
         if out_pubkey.is_null() || out_uuid.is_null() || algo_ptr.is_null() || algo_len == 0 {
-            return -1;
+            return KeyManagerError::InvalidArgument;
         }
 
         // Convert to Safe Types
@@ -84,23 +84,24 @@ pub unsafe extern "C" fn key_manager_generate_binding_keypair(
 
         let algo = match HpkeAlgorithm::decode(algo_slice) {
             Ok(a) => a,
-            Err(_) => return -1,
+            Err(_) => return KeyManagerError::InvalidArgument,
         };
 
         // Call Safe Internal Function
         match generate_binding_keypair_internal(algo, expiry_secs) {
             Ok((id, pubkey)) => {
                 if out_pubkey_len != pubkey.as_bytes().len() {
-                    return -2;
+                    return KeyManagerError::BufferTooSmall;
                 }
                 out_uuid.copy_from_slice(id.as_bytes());
                 out_pubkey.copy_from_slice(pubkey.as_bytes());
-                0 // Success
+                KeyManagerError::Success
             }
             Err(e) => e,
         }
     }))
-    .unwrap_or(-1)
+    .unwrap_or(KeyManagerError::Panic)
+    .into()
 }
 
 /// Destroys the binding key associated with the given UUID.
@@ -113,42 +114,48 @@ pub unsafe extern "C" fn key_manager_generate_binding_keypair(
 /// The caller must ensure that `uuid_bytes` points to a valid 16-byte buffer.
 ///
 /// ## Returns
-/// * `0` on success.
-/// * `-1` if the UUID pointer is null or the key was not found.
+/// * `KeyManagerError::Success` (0) on success.
+/// * Error code on failure.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn key_manager_destroy_binding_key(uuid_bytes: *const u8) -> i32 {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if uuid_bytes.is_null() {
-            return -1;
+            return KeyManagerError::InvalidArgument;
         }
         let bytes = unsafe { slice::from_raw_parts(uuid_bytes, 16) };
         let uuid = Uuid::from_bytes(bytes.try_into().expect("invalid UUID bytes"));
 
         match KEY_REGISTRY.remove_key(&uuid) {
-            Some(_) => 0, // Success
-            None => -1,   // Not found
+            Some(_) => KeyManagerError::Success,
+            None => KeyManagerError::KeyNotFound,
         }
     }))
-    .unwrap_or(-1)
+    .unwrap_or(KeyManagerError::Panic)
+    .into()
 }
 
 /// Internal function to decrypt a ciphertext using a stored binding key.
-fn open_internal(uuid: Uuid, enc: &[u8], ciphertext: &[u8], aad: &[u8]) -> Result<SecretBox, i32> {
+fn open_internal(
+    uuid: Uuid,
+    enc: &[u8],
+    ciphertext: &[u8],
+    aad: &[u8],
+) -> Result<SecretBox, KeyManagerError> {
     let record = match KEY_REGISTRY.get_key(&uuid) {
         Some(r) => r,
-        None => return Err(-1),
+        None => return Err(KeyManagerError::KeyNotFound),
     };
 
     let algo = match &record.meta.spec {
         KeySpec::Binding { algo, .. } => algo,
-        _ => return Err(-1),
+        _ => return Err(KeyManagerError::InvalidKey),
     };
 
     let priv_key = record.get_private_key();
 
     match km_common::crypto::hpke_open(&priv_key, enc, ciphertext, aad, algo) {
         Ok(pt) => Ok(pt),
-        Err(_) => Err(-3),
+        Err(_) => Err(KeyManagerError::DecryptionFailed),
     }
 }
 
@@ -176,10 +183,8 @@ fn open_internal(uuid: Uuid, enc: &[u8], ciphertext: &[u8], aad: &[u8]) -> Resul
 /// * `out_plaintext_len` points to a valid `usize`.
 ///
 /// ## Returns
-/// * `0` on success.
-/// * `-1` if arguments are invalid (e.g., key not found, null pointers).
-/// * `-2` if the `out_plaintext` buffer is too small.
-/// * `-3` if decryption failed.
+/// * `KeyManagerError::Success` (0) on success.
+/// * Error code on failure.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn key_manager_open(
     uuid_bytes: *const u8,
@@ -199,7 +204,7 @@ pub unsafe extern "C" fn key_manager_open(
             || out_plaintext.is_null()
             || out_plaintext_len == 0
         {
-            return -1;
+            return KeyManagerError::InvalidArgument;
         }
 
         let uuid_slice = unsafe { std::slice::from_raw_parts(uuid_bytes, 16) };
@@ -215,22 +220,23 @@ pub unsafe extern "C" fn key_manager_open(
 
         let uuid = match Uuid::from_slice(uuid_slice) {
             Ok(u) => u,
-            Err(_) => return -1,
+            Err(_) => return KeyManagerError::InvalidArgument,
         };
 
         // Call Safe Internal Function
         match open_internal(uuid, enc_slice, ct_slice, aad_slice) {
             Ok(pt) => {
                 if out_plaintext_len != pt.as_slice().len() {
-                    return -2;
+                    return KeyManagerError::BufferTooSmall;
                 }
                 out_plaintext_slice.copy_from_slice(pt.as_slice());
-                0 // Success
+                KeyManagerError::Success
             }
             Err(e) => e,
         }
     }))
-    .unwrap_or(-1)
+    .unwrap_or(KeyManagerError::Panic)
+    .into()
 }
 
 #[cfg(test)]
@@ -279,7 +285,7 @@ mod tests {
             )
         };
 
-        assert_eq!(result, 0);
+        assert_eq!(result, KeyManagerError::Success as i32);
         assert_ne!(uuid_bytes, [0u8; 16]);
         assert_eq!(pubkey_len, 32); // X25519 public key is 32 bytes
         assert_ne!(&pubkey_bytes[..32], &[0u8; 32]);
@@ -304,7 +310,7 @@ mod tests {
             )
         };
 
-        assert_eq!(result, -1);
+        assert_eq!(result, KeyManagerError::InvalidArgument as i32);
         assert_eq!(uuid_bytes, [0u8; 16]); // Should remain untouched/zero
     }
 
@@ -329,7 +335,7 @@ mod tests {
             )
         };
 
-        assert_eq!(result, -1);
+        assert_eq!(result, KeyManagerError::InvalidArgument as i32);
     }
 
     #[test]
@@ -355,7 +361,7 @@ mod tests {
             )
         };
 
-        assert_eq!(result, -2);
+        assert_eq!(result, KeyManagerError::BufferTooSmall as i32);
         assert_eq!(uuid_bytes, [0u8; 16]); // Should remain untouched/zero
         assert_eq!(&pubkey_bytes[..32], &[0u8; 32]); // Should remain untouched/zero
     }
@@ -384,24 +390,24 @@ mod tests {
         };
 
         let result = unsafe { key_manager_destroy_binding_key(uuid_bytes.as_ptr()) };
-        assert_eq!(result, 0);
+        assert_eq!(result, KeyManagerError::Success as i32);
 
         // Second destroy should fail
         let result = unsafe { key_manager_destroy_binding_key(uuid_bytes.as_ptr()) };
-        assert_eq!(result, -1);
+        assert_eq!(result, KeyManagerError::KeyNotFound as i32);
     }
 
     #[test]
     fn test_destroy_binding_key_not_found() {
         let uuid_bytes = [0u8; 16];
         let result = unsafe { key_manager_destroy_binding_key(uuid_bytes.as_ptr()) };
-        assert_eq!(result, -1);
+        assert_eq!(result, KeyManagerError::KeyNotFound as i32);
     }
 
     #[test]
     fn test_destroy_binding_key_null_ptr() {
         let result = unsafe { key_manager_destroy_binding_key(std::ptr::null()) };
-        assert_eq!(result, -1);
+        assert_eq!(result, KeyManagerError::InvalidArgument as i32);
     }
 
     #[test]
@@ -452,7 +458,7 @@ mod tests {
             )
         };
 
-        assert_eq!(result, 0);
+        assert_eq!(result, KeyManagerError::Success as i32);
         assert_eq!(&out_pt, PT);
     }
 
@@ -474,7 +480,7 @@ mod tests {
                 out_pt_len,
             )
         };
-        assert_eq!(result, -1);
+        assert_eq!(result, KeyManagerError::KeyNotFound as i32);
     }
 
     #[test]
@@ -520,7 +526,7 @@ mod tests {
             )
         };
 
-        assert_eq!(result, -2);
+        assert_eq!(result, KeyManagerError::BufferTooSmall as i32);
         assert_eq!(out_pt, [0u8; 5]); // Should remain untouched/zero
     }
 }
