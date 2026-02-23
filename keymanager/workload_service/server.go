@@ -16,19 +16,19 @@ import (
 	"github.com/google/uuid"
 
 	kpscc "github.com/google/go-tpm-tools/keymanager/key_protection_service/key_custody_core"
-	algorithms "github.com/google/go-tpm-tools/keymanager/km_common/proto"
+	keymanager "github.com/google/go-tpm-tools/keymanager/km_common/proto"
 	wskcc "github.com/google/go-tpm-tools/keymanager/workload_service/key_custody_core"
 )
 
 // WorkloadService defines the interface for generating binding keypairs.
 type WorkloadService interface {
-	GenerateBindingKeypair(algo *algorithms.HpkeAlgorithm, lifespanSecs uint64) (uuid.UUID, []byte, error)
+	GenerateBindingKeypair(algo *keymanager.HpkeAlgorithm, lifespanSecs uint64) (uuid.UUID, []byte, error)
 }
 type keyProtectionService struct{}
 
 // KeyProtectionService defines the interface for generating KEM keypairs.
 type KeyProtectionService interface {
-	GenerateKEMKeypair(algo *algorithms.HpkeAlgorithm, bindingPubKey []byte, lifespanSecs uint64) (uuid.UUID, []byte, error)
+	GenerateKEMKeypair(algo *keymanager.HpkeAlgorithm, bindingPubKey []byte, lifespanSecs uint64) (uuid.UUID, []byte, error)
 }
 type workloadService struct{}
 
